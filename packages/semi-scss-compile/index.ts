@@ -1,26 +1,27 @@
 /* eslint-disable prefer-promise-reject-errors */
 import path from 'path';
-import sass, { Options as RenderOptions } from 'sass';
+import sass, {Options as RenderOptions} from 'sass';
 import fs from 'fs-extra';
+import os from 'os';
 
 export interface CompileScssOptions {
-    COMPONENT_SCSS_PATH: string;
-    OUTPUT_SEMI_SCSS_PATH: string;
-    OUTPUT_SEMI_CSS_PATH: string;
-    OUTPUT_SEMI_CSS_MIN_PATH: string;
-    COMPONENT_EXTRA_SCSS_PATH?: string;
-    useAbsolutePath?: boolean;
+    semiFoundationPath: string;
+    semiThemePath:string;
+    outputCSSPath:string;
+    isMin:boolean;
+
 }
 
 const defaultOptions = {
-    COMPONENT_SCSS_PATH: 'tempory/semi-ui/',
-    OUTPUT_SEMI_SCSS_PATH: 'tempory/release/semi.scss',
-    OUTPUT_SEMI_CSS_PATH: 'tempory/release/css/semi.css',
-    OUTPUT_SEMI_CSS_MIN_PATH: 'tempory/release/css/semi-min.css',
+    // COMPONENT_SCSS_PATH: resolve('semi-foundation/'),
+    // OUTPUT_SEMI_SCSS_PATH: resolve('semi-theme-default/semi.scss'),
+    // OUTPUT_SEMI_CSS_PATH: resolve('semi-ui/dist/css/semi.css'),
+    // OUTPUT_SEMI_CSS_MIN_PATH: resolve('semi-ui/dist/css/semi.min.css'),
 };
 
 export default class CompileScss {
     options: CompileScssOptions;
+
     /**
      * @param {object} [options]
      * @param {string} [options.COMPONENT_SCSS_PATH]
@@ -57,32 +58,72 @@ export default class CompileScss {
             });
     }
 
-    async generateSemiScss() {
+    async getScssFilePathPreparingForCompiling() {
         const componentScssPath = this.options.COMPONENT_SCSS_PATH;
         const outPutSemiScss = this.options.OUTPUT_SEMI_SCSS_PATH;
         const outPutScss = outPutSemiScss.split('semi.scss')[0] + 'scss';
         const folderWithScss = await this.getScssFolderMap(componentScssPath);
-        const relativePath = '../semi-foundation'; // When used in the Semi main repository, use relative paths to build to avoid different semi.scss built when different people publish versions
-        const absolutePath = componentScssPath; // When used in semi-server, the absolute path is used to build, so that the semiUI path is not located in the same directory structure as the semi.scss built
-        let indexScss = '@import "./scss/index.scss";';
-        let globalScss = '@import "./scss/global.scss";';
-        let semiUIPath = this.options.useAbsolutePath ? absolutePath : relativePath;
+
+
+        const scssFilePathPreparingForCompiling: {
+            components: string[],
+            theme: {
+                'index.scss'?: string,
+                'global.scss'?: string,
+                'local.scss'?: string,
+                '_font.scss'?: string,
+                '_palette.scss'?: string,
+                'mixin.scss'?: string,
+                'variables.scss'?: string
+            }
+        } = {
+            components: [],
+            theme: {
+                "index.scss": './scss/index.scss',
+                "global.scss": './scss/global.scss',
+                'local.scss': './scss/local.scss',
+                "_font.scss": '.scss/_font.scss',
+                "_palette.scss": './scss/_palette.scss',
+                "mixin.scss": './scss/mixin.scss',
+                'variables.scss': './scss/variables.scss'
+            }
+        };
 
         if (this.options.useAbsolutePath) {
             semiUIPath = absolutePath;
-            indexScss = `@import "${outPutScss}/index.scss";`;
-            globalScss = `@import "${outPutScss}/global.scss";`;
+            scssFilePathPreparingForCompiling.theme = {
+                "index.scss": `${outPutScss}/index.scss`,
+                "global.scss": `${outPutScss}/global.scss`,
+                "local.scss": `${outPutScss}/local.scss`,
+                '_font.scss': `${outPutScss}/_font.scss`,
+                '_palette.scss': `${outPutScss}/_palette.scss`,
+                "mixin.scss": `${outPutScss}/mixin.scss`,
+                "variables.scss": `${outPutScss}/variables.scss`
+            }
         }
 
-        const componentScss = folderWithScss
-            .map(scssFile => `@import "${semiUIPath}/${scssFile}/${scssFile}.scss"`)
-            .concat([
-                `@import "${semiUIPath}/button/iconButton.scss"`,
-                `@import "${semiUIPath}/input/textarea.scss"`,
-            ]) // Handle the scss of iconButton/textarea separately
-            .join(';\n');
-        const fileContent = `${indexScss}\n${globalScss}\n${componentScss}`;
-        return fs.outputFile(outPutSemiScss, fileContent);
+        folderWithScss.forEach(scssFile => {
+            const filepath = `${semiUIPath}/${scssFile}${scssFile}.scss`;
+            scssFilePathPreparingForCompiling.components.push(filepath)
+        })
+        scssFilePathPreparingForCompiling.components.push(`${semiUIPath}/button/iconButton.scss`);
+        scssFilePathPreparingForCompiling.components.push(`${semiUIPath}/input/textarea.scss`);
+
+        //filter non-exist file
+        scssFilePathPreparingForCompiling.components = scssFilePathPreparingForCompiling.components.filter(scssFilePath => fs.existsSync(scssFilePath));
+        for (const filename of Object.keys(scssFilePathPreparingForCompiling.theme)) {
+            if (!fs.statSync(scssFilePathPreparingForCompiling.theme[filename])) {
+                delete scssFilePathPreparingForCompiling.theme[filename];
+            }
+        }
+
+        return scssFilePathPreparingForCompiling;
+    }
+
+    async preparingTempDirForCompiling(){
+        const tempDir=path.resolve(os.tmpdir(),`/semi_compile_temp_path_${Date.now()}`);
+        fs.emptyDirSync(tempDir);
+
     }
 
     rewriteFile(filePath: string) {
@@ -97,7 +138,8 @@ export default class CompileScss {
                     fileSplit.splice(fileSplit.length - 1, 0, localImport);
                     fileStr = fileSplit.join('');
                 }
-            } catch (error) { }
+            } catch (error) {
+            }
         }
         return fileStr;
     }
@@ -108,11 +150,12 @@ export default class CompileScss {
         const config: RenderOptions = {
             file: semiScssPath,
             importer: (url: string) => {
+
                 if (url.startsWith('../semi-ui/')) {
                     const result = this.rewriteFile(url);
-                    return { contents: result };
+                    return {contents: result};
                 }
-                return { file: url };
+                return {file: url};
             }
         };
         if (compressed) {
